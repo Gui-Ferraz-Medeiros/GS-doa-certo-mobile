@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -154,6 +155,7 @@ class DonationState extends ChangeNotifier {
   String userName = 'Maria L.';
   bool isLoggedIn = false;
   bool isLoading = true;
+  List<_DemoAccount>? _demoAccounts;
 
   List<DonationItem> get donations => [..._donations];
 
@@ -162,6 +164,7 @@ class DonationState extends ChangeNotifier {
     notifyListeners();
 
     final prefs = await SharedPreferences.getInstance();
+    await _ensureDemoAccountsLoaded(prefs);
     highContrast = prefs.getBool('doacerto_high_contrast') ?? false;
     fontScale = prefs.getDouble('doacerto_font_scale') ?? 1;
     locationConsentDecided =
@@ -383,11 +386,43 @@ class DonationState extends ChangeNotifier {
     await prefs.setBool('doacerto_location_consent_granted', granted);
   }
 
-  void toggleRole(String role) {
-    userRole = role;
-    userName = role == 'empresa' ? 'Recicla Mais' : 'Maria L.';
-    notifyListeners();
-    persist();
+  Future<String?> registerUser({
+    required String name,
+    required String email,
+    required String password,
+    required String role,
+  }) async {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (name.trim().isEmpty) return 'Informe seu nome.';
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(normalizedEmail)) {
+      return 'Informe um e-mail válido.';
+    }
+    if (password.length < 6) {
+      return 'A senha deve ter pelo menos 6 caracteres.';
+    }
+    if (role != 'doador' && role != 'empresa') {
+      return 'Selecione um perfil válido.';
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await _ensureDemoAccountsLoaded(prefs);
+    if (_demoAccounts!.any((account) => account.email == normalizedEmail)) {
+      return 'Já existe uma conta cadastrada com este e-mail.';
+    }
+
+    final salt =
+        '${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1 << 31)}';
+    final account = _DemoAccount(
+      name: name.trim(),
+      email: normalizedEmail,
+      role: role,
+      salt: salt,
+      passwordHash: _hashPassword(salt, password),
+    );
+    _demoAccounts!.add(account);
+    await _saveDemoAccounts(prefs);
+    await _startSession(account, prefs);
+    return null;
   }
 
   void markDonationDelivered(String id) {
@@ -398,20 +433,99 @@ class DonationState extends ChangeNotifier {
     persist();
   }
 
-  void login({required String email, required String password}) {
-    if (email.isEmpty || password.isEmpty) {
-      return;
+  Future<String?> login({
+    required String email,
+    required String password,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _ensureDemoAccountsLoaded(prefs);
+    final normalizedEmail = email.trim().toLowerCase();
+    _DemoAccount? matchedAccount;
+    for (final account in _demoAccounts!) {
+      if (account.email == normalizedEmail &&
+          account.passwordHash == _hashPassword(account.salt, password)) {
+        matchedAccount = account;
+        break;
+      }
     }
-    isLoggedIn = true;
-    notifyListeners();
-    persist();
+
+    if (matchedAccount == null) return 'E-mail ou senha inválidos.';
+    await _startSession(matchedAccount, prefs);
+    return null;
   }
 
-  void logout() {
+  Future<void> logout() async {
     isLoggedIn = false;
     notifyListeners();
-    persist();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('doacerto_auth_session');
   }
+
+  Future<void> _ensureDemoAccountsLoaded(SharedPreferences prefs) async {
+    if (_demoAccounts != null) return;
+
+    final savedAccounts = prefs.getString('doacerto_demo_users');
+    if (savedAccounts == null) {
+      const demoSalt = 'doacerto-demo-account';
+      _demoAccounts = [
+        _DemoAccount(
+          name: 'Maria L.',
+          email: 'maria@doacerto.com',
+          role: 'doador',
+          salt: demoSalt,
+          passwordHash: _hashPassword(demoSalt, '123456'),
+        ),
+      ];
+      await _saveDemoAccounts(prefs);
+    } else {
+      try {
+        final decoded = jsonDecode(savedAccounts) as List<dynamic>;
+        _demoAccounts = decoded
+            .map((item) => _DemoAccount.fromJson(item as Map<String, dynamic>))
+            .toList();
+      } catch (error) {
+        debugPrint('Não foi possível ler as contas demonstrativas: $error');
+        rethrow;
+      }
+    }
+
+    final savedEmail = prefs.getString('doacerto_auth_session');
+    if (savedEmail != null) {
+      for (final account in _demoAccounts!) {
+        if (account.email == savedEmail) {
+          _applyAccount(account);
+          notifyListeners();
+          break;
+        }
+      }
+    }
+  }
+
+  Future<void> _saveDemoAccounts(SharedPreferences prefs) async {
+    await prefs.setString(
+      'doacerto_demo_users',
+      jsonEncode(_demoAccounts!.map((account) => account.toJson()).toList()),
+    );
+  }
+
+  Future<void> _startSession(
+    _DemoAccount account,
+    SharedPreferences prefs,
+  ) async {
+    _applyAccount(account);
+    await prefs.setString('doacerto_auth_session', account.email);
+    notifyListeners();
+    await persist();
+  }
+
+  void _applyAccount(_DemoAccount account) {
+    userName = account.name;
+    userRole = account.role;
+    isLoggedIn = true;
+  }
+
+  static String _hashPassword(String salt, String password) =>
+      sha256.convert(utf8.encode('$salt:$password')).toString();
 
   DonationItem addDonation({
     required String title,
@@ -615,6 +729,38 @@ class DonationState extends ChangeNotifier {
       ),
     ];
   }
+}
+
+class _DemoAccount {
+  const _DemoAccount({
+    required this.name,
+    required this.email,
+    required this.role,
+    required this.salt,
+    required this.passwordHash,
+  });
+
+  final String name;
+  final String email;
+  final String role;
+  final String salt;
+  final String passwordHash;
+
+  factory _DemoAccount.fromJson(Map<String, dynamic> json) => _DemoAccount(
+    name: json['name'] as String,
+    email: json['email'] as String,
+    role: json['role'] as String,
+    salt: json['salt'] as String,
+    passwordHash: json['passwordHash'] as String,
+  );
+
+  Map<String, String> toJson() => {
+    'name': name,
+    'email': email,
+    'role': role,
+    'salt': salt,
+    'passwordHash': passwordHash,
+  };
 }
 
 TerritorialDashboardArgs _dashboardArgs(RouteSettings settings) {
@@ -945,141 +1091,271 @@ class _AuthScreenState extends State<AuthScreen> {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController(text: 'maria@doacerto.com');
   final _passwordController = TextEditingController(text: '123456');
+  final _nameController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
+  bool _isRegistering = false;
+  bool _isSubmitting = false;
+  String _selectedRole = 'doador';
+  String? _authError;
 
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
+    _nameController.dispose();
+    _confirmPasswordController.dispose();
     super.dispose();
   }
 
-  void _login(BuildContext context) {
-    if (_formKey.currentState!.validate()) {
+  Future<void> _submit(BuildContext context) async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _isSubmitting = true;
+      _authError = null;
+    });
+
+    try {
       final state = context.read<DonationState>();
-      state.login(
-        email: _emailController.text,
-        password: _passwordController.text,
+      final error = _isRegistering
+          ? await state.registerUser(
+              name: _nameController.text,
+              email: _emailController.text,
+              password: _passwordController.text,
+              role: _selectedRole,
+            )
+          : await state.login(
+              email: _emailController.text,
+              password: _passwordController.text,
+            );
+      if (!mounted) return;
+      setState(() => _authError = error);
+    } catch (error) {
+      debugPrint('Erro ao autenticar conta demonstrativa: $error');
+      if (!mounted) return;
+      setState(
+        () => _authError = 'Não foi possível acessar as contas deste aparelho.',
       );
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const MainNavigationScreen()),
-      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Acessibilidade'),
-        actions: const [_AccessibilityMenu()],
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Center(
-            child: SingleChildScrollView(
-              child: Form(
-                key: _formKey,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(18),
-                        decoration: const BoxDecoration(
-                          color: Color(0xFFE8F5F1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.favorite,
-                          color: Color(0xFF1F8A70),
-                          size: 52,
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-                      Text(
-                        'DoaCerto',
-                        textAlign: TextAlign.center,
-                        style: textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFF123E35),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Conectando doações reais com quem precisa.',
-                        textAlign: TextAlign.center,
-                        style: textTheme.bodyLarge?.copyWith(
-                          color: Colors.black54,
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                      TextFormField(
-                        controller: _emailController,
-                        validator: (value) => value == null || value.isEmpty
-                            ? 'Informe o e-mail.'
-                            : null,
-                        decoration: const InputDecoration(
-                          labelText: 'E-mail',
-                          prefixIcon: Icon(Icons.email_outlined),
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: _passwordController,
-                        obscureText: true,
-                        validator: (value) => value == null || value.length < 6
-                            ? 'Senha com mínimo de 6 caracteres.'
-                            : null,
-                        decoration: const InputDecoration(
-                          labelText: 'Senha',
-                          prefixIcon: Icon(Icons.lock_outline),
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Consumer<DonationState>(
-                        builder: (context, state, _) {
-                          return SegmentedButton<String>(
-                            segments: const [
-                              ButtonSegment(
-                                value: 'doador',
-                                label: Text('Doador'),
+    return Consumer<DonationState>(
+      builder: (context, state, _) {
+        if (state.isLoggedIn) return const MainNavigationScreen();
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Acessibilidade'),
+            actions: const [_AccessibilityMenu()],
+          ),
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: SingleChildScrollView(
+                  child: Form(
+                    key: _formKey,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(18),
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFE8F5F1),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.favorite,
+                              color: Color(0xFF1F8A70),
+                              size: 52,
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          Text(
+                            'DoaCerto',
+                            textAlign: TextAlign.center,
+                            style: textTheme.headlineMedium?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF123E35),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Conectando doações reais com quem precisa.',
+                            textAlign: TextAlign.center,
+                            style: textTheme.bodyLarge?.copyWith(
+                              color: Colors.black54,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            'Acesso demonstrativo: contas ficam apenas neste '
+                            'aparelho; nenhum e-mail de verificação é enviado.',
+                            textAlign: TextAlign.center,
+                            style: textTheme.bodySmall?.copyWith(
+                              color: Colors.black54,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          if (_isRegistering) ...[
+                            TextFormField(
+                              controller: _nameController,
+                              textCapitalization: TextCapitalization.words,
+                              maxLength: 80,
+                              validator: (value) =>
+                                  value == null || value.trim().isEmpty
+                                  ? 'Informe seu nome.'
+                                  : null,
+                              decoration: const InputDecoration(
+                                labelText: 'Nome',
+                                prefixIcon: Icon(Icons.person_outline),
+                                border: OutlineInputBorder(),
                               ),
-                              ButtonSegment(
-                                value: 'empresa',
-                                label: Text('Empresa'),
-                              ),
-                            ],
-                            selected: {state.userRole},
-                            onSelectionChanged: (selection) {
-                              state.toggleRole(selection.first);
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          TextFormField(
+                            controller: _emailController,
+                            keyboardType: TextInputType.emailAddress,
+                            autocorrect: false,
+                            validator: (value) {
+                              final email = value?.trim() ?? '';
+                              return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+                                      .hasMatch(email)
+                                  ? null
+                                  : 'Informe um e-mail válido.';
                             },
-                          );
-                        },
+                            decoration: const InputDecoration(
+                              labelText: 'E-mail',
+                              prefixIcon: Icon(Icons.email_outlined),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          TextFormField(
+                            controller: _passwordController,
+                            obscureText: true,
+                            validator: (value) =>
+                                value == null || value.length < 6
+                                ? 'Senha com mínimo de 6 caracteres.'
+                                : null,
+                            decoration: const InputDecoration(
+                              labelText: 'Senha',
+                              prefixIcon: Icon(Icons.lock_outline),
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          if (_isRegistering) ...[
+                            const SizedBox(height: 16),
+                            TextFormField(
+                              controller: _confirmPasswordController,
+                              obscureText: true,
+                              validator: (value) =>
+                                  value != _passwordController.text
+                                  ? 'As senhas não conferem.'
+                                  : null,
+                              decoration: const InputDecoration(
+                                labelText: 'Confirmar senha',
+                                prefixIcon: Icon(Icons.lock_outline),
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                            SegmentedButton<String>(
+                              segments: const [
+                                ButtonSegment(
+                                  value: 'doador',
+                                  label: Text('Doador'),
+                                ),
+                                ButtonSegment(
+                                  value: 'empresa',
+                                  label: Text('Empresa'),
+                                ),
+                              ],
+                              selected: {_selectedRole},
+                              onSelectionChanged: (selection) {
+                                setState(() => _selectedRole = selection.first);
+                              },
+                            ),
+                          ],
+                          if (!_isRegistering) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'Conta de teste: maria@doacerto.com · senha: 123456',
+                              textAlign: TextAlign.center,
+                              style: textTheme.bodySmall?.copyWith(
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                          if (_authError != null) ...[
+                            const SizedBox(height: 16),
+                            Text(
+                              _authError!,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Theme.of(context).colorScheme.error,
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 24),
+                          FilledButton.icon(
+                            onPressed: _isSubmitting
+                                ? null
+                                : () => _submit(context),
+                            icon: _isSubmitting
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Icon(
+                                    _isRegistering
+                                        ? Icons.person_add_alt_1
+                                        : Icons.login_rounded,
+                                  ),
+                            label: Text(
+                              _isRegistering ? 'Criar conta' : 'Entrar',
+                            ),
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(52),
+                              backgroundColor: const Color(0xFF1F8A70),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: _isSubmitting
+                                ? null
+                                : () {
+                                    setState(() {
+                                      _isRegistering = !_isRegistering;
+                                      _authError = null;
+                                    });
+                                    _formKey.currentState?.reset();
+                                  },
+                            child: Text(
+                              _isRegistering
+                                  ? 'Já tenho uma conta · Entrar'
+                                  : 'Criar uma conta',
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 24),
-                      FilledButton.icon(
-                        onPressed: () => _login(context),
-                        icon: const Icon(Icons.login_rounded),
-                        label: const Text('Entrar'),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(52),
-                          backgroundColor: const Color(0xFF1F8A70),
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -2248,8 +2524,9 @@ class ProfileScreen extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.logout_outlined),
             title: const Text('Sair'),
-            onTap: () {
-              context.read<DonationState>().logout();
+            onTap: () async {
+              await context.read<DonationState>().logout();
+              if (!context.mounted) return;
               Navigator.of(context).pushAndRemoveUntil(
                 MaterialPageRoute(builder: (_) => const AuthScreen()),
                 (route) => false,

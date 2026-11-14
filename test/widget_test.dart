@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:doacerto_mobile/main.dart';
 import 'package:doacerto_mobile/territorial_dashboards.dart';
@@ -84,6 +85,62 @@ void main() {
     expect(restored.scheduledAt, schedule);
     expect(restored.receiptCode, 'DS-TESTE');
   });
+
+  test(
+    'Demo accounts validate credentials and persist account roles',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final state = DonationState();
+
+      expect(
+        await state.login(
+          email: 'maria@doacerto.com',
+          password: 'senha-incorreta',
+        ),
+        isNotNull,
+      );
+      expect(
+        await state.login(email: 'maria@doacerto.com', password: '123456'),
+        isNull,
+      );
+      await state.logout();
+
+      expect(
+        await state.registerUser(
+          name: 'Ana Costa',
+          email: 'ANA@EXAMPLE.COM',
+          password: 'senha123',
+          role: 'empresa',
+        ),
+        isNull,
+      );
+      expect(state.isLoggedIn, isTrue);
+      expect(state.userName, 'Ana Costa');
+      expect(state.userRole, 'empresa');
+      expect(
+        await state.registerUser(
+          name: 'Outra Pessoa',
+          email: 'ana@example.com',
+          password: 'senha123',
+          role: 'doador',
+        ),
+        isNotNull,
+      );
+
+      await state.logout();
+      expect(
+        await state.login(email: 'ana@example.com', password: 'incorreta'),
+        isNotNull,
+      );
+      expect(state.isLoggedIn, isFalse);
+      expect(
+        await state.login(email: 'ana@example.com', password: 'senha123'),
+        isNull,
+      );
+      expect(state.isLoggedIn, isTrue);
+      expect(state.userRole, 'empresa');
+    },
+  );
 
   testWidgets('DoaCerto app loads login screen', (WidgetTester tester) async {
     await tester.pumpWidget(
