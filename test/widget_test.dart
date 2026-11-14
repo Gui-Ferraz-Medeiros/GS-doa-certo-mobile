@@ -86,6 +86,110 @@ void main() {
     expect(restored.receiptCode, 'DS-TESTE');
   });
 
+  test('Donation offers preserve quantities, photos, and delivery details', () {
+    final schedule = DateTime(2026, 12, 1, 14, 30);
+    final donation = DonationItem(
+      id: 'with-offer',
+      title: 'Roupas',
+      category: 'Vestuário',
+      quantity: 3,
+      location: 'São Paulo - SP',
+      description: 'Roupas em bom estado para doação.',
+      deadline: '2026-12-10',
+      latitude: -23.55,
+      longitude: -46.63,
+      status: 'Disponível',
+      donor: 'Instituição',
+      createdAt: DateTime(2026, 11, 10),
+      offeredQuantity: 2,
+      offers: [
+        DonationOffer(
+          id: 'offer-1',
+          donor: 'Ana',
+          quantity: 2,
+          photos: ['aGVsbG8='],
+          note: 'Tamanho infantil',
+          deliveryOption: 'Entregar no local indicado',
+          createdAt: DateTime(2026, 11, 11),
+          scheduledAt: schedule,
+        ),
+      ],
+    );
+
+    final restored = DonationItem.fromJson(donation.toJson());
+    expect(restored.offers, hasLength(1));
+    expect(restored.offers.single.donor, 'Ana');
+    expect(restored.offers.single.quantity, 2);
+    expect(restored.offers.single.photos, ['aGVsbG8=']);
+    expect(restored.offers.single.note, 'Tamanho infantil');
+    expect(restored.offers.single.scheduledAt, schedule);
+  });
+
+  test(
+    'Offering a partial quantity updates the listing and validates stock',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final donation = DonationItem(
+        id: 'available',
+        title: 'Cestas básicas',
+        category: 'Alimentos',
+        quantity: 5,
+        location: 'São Paulo - SP',
+        description: 'Cestas para famílias em situação vulnerável.',
+        deadline: '2026-12-10',
+        latitude: -23.55,
+        longitude: -46.63,
+        status: 'Disponível',
+        donor: 'Instituição',
+        createdAt: DateTime(2026, 11, 10),
+      );
+      final state = DonationState(initialDonations: [donation]);
+      final offered = await state.offerDonation(
+        donation.id,
+        quantity: 3,
+        photos: ['aGVsbG8='],
+        note: 'Itens novos',
+        deliveryOption: 'Entregar no local indicado',
+      );
+
+      expect(offered, isTrue);
+      expect(state.donations.single.quantity, 2);
+      expect(state.donations.single.offeredQuantity, 3);
+      expect(state.donations.single.offers.single.quantity, 3);
+      expect(state.donations.single.offers.single.photos, ['aGVsbG8=']);
+      expect(state.donations.single.status, 'Disponível');
+      expect(state.totalDelivered, 1);
+      expect(state.deliveredItems, 3);
+      expect(state.myDeliveredDonations, 1);
+      expect(state.myDeliveredItems, 3);
+
+      expect(
+        await state.offerDonation(
+          donation.id,
+          quantity: 3,
+          deliveryOption: 'Entregar no local indicado',
+        ),
+        isFalse,
+      );
+      expect(state.donations.single.quantity, 2);
+
+      expect(
+        await state.offerDonation(
+          donation.id,
+          quantity: 2,
+          deliveryOption: 'Preciso combinar a retirada',
+        ),
+        isTrue,
+      );
+      expect(state.donations.single.status, 'Entregue');
+      expect(state.totalDelivered, 2);
+      expect(state.deliveredItems, 5);
+      expect(state.myDeliveredDonations, 2);
+      expect(state.myDeliveredItems, 5);
+      expect(state.donationHistory, hasLength(2));
+    },
+  );
+
   test(
     'Demo accounts validate credentials and persist account roles',
     () async {
@@ -152,6 +256,84 @@ void main() {
 
     expect(find.text('DoaCerto'), findsOneWidget);
     expect(find.text('Entrar'), findsOneWidget);
+  });
+
+  testWidgets('Donation card opens details and offer form', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final donation = DonationItem(
+      id: 'card-donation',
+      title: 'Cestas básicas',
+      category: 'Alimentos',
+      quantity: 5,
+      location: 'São Paulo - SP',
+      description: 'Cestas para famílias em situação vulnerável.',
+      deadline: '2026-12-10',
+      latitude: -23.55,
+      longitude: -46.63,
+      status: 'Disponível',
+      donor: 'Instituição',
+      createdAt: DateTime(2026, 11, 10),
+      receiptCode: 'DS-TESTE',
+    );
+    final state = DonationState(initialDonations: [donation]);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: state,
+        child: MaterialApp(
+          home: Scaffold(body: DonationCard(donation: donation)),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Detalhes'));
+    await tester.pumpAndSettle();
+    expect(find.text('Detalhes da doação'), findsOneWidget);
+    expect(find.text('Código'), findsOneWidget);
+    expect(find.text('DS-TESTE'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Ofertar'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ofertar doação'), findsOneWidget);
+    expect(find.textContaining('5 itens disponíveis'), findsOneWidget);
+    expect(find.text('Selecionar fotos'), findsOneWidget);
+    await tester.drag(find.byType(ListView).last, const Offset(0, -500));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmar oferta').last);
+    await tester.pumpAndSettle();
+
+    expect(state.donations.single.quantity, 4);
+    expect(state.donations.single.offers.single.quantity, 1);
+    expect(state.totalDelivered, 1);
+    expect(state.deliveredItems, 1);
+    expect(state.myDeliveredDonations, 1);
+    expect(state.myDeliveredItems, 1);
+    expect(find.text('Oferta registrada como entregue.'), findsOneWidget);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: state,
+        child: const MaterialApp(home: DonationHistoryScreen()),
+      ),
+    );
+    expect(find.text('Histórico de ofertas'), findsOneWidget);
+    expect(find.text('Cestas básicas'), findsOneWidget);
+    expect(find.textContaining('1 item entregue'), findsOneWidget);
+    expect(find.text('Entregue'), findsOneWidget);
+
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: state,
+        child: const MaterialApp(home: ProfileScreen()),
+      ),
+    );
+    await tester.tap(find.text('Histórico de ofertas'));
+    await tester.pumpAndSettle();
+    expect(find.text('Histórico de ofertas'), findsOneWidget);
+    expect(find.text('Cestas básicas'), findsOneWidget);
   });
 
   testWidgets('territorial hub opens named dashboard with selected territory', (

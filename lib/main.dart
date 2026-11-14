@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -562,26 +563,45 @@ class DonationState extends ChangeNotifier {
     return item;
   }
 
-  void offerDonation(String id) {
+  Future<bool> offerDonation(
+    String id, {
+    required int quantity,
+    List<String> photos = const [],
+    String note = '',
+    required String deliveryOption,
+    DateTime? scheduledAt,
+  }) async {
     final index = _donations.indexWhere((item) => item.id == id);
-    if (index == -1) return;
+    if (index == -1) return false;
 
     final item = _donations[index];
-    if (item.quantity <= 1) {
-      _donations[index] = item.copyWith(
-        status: 'Pendente',
-        quantity: 0,
-        offeredQuantity: item.offeredQuantity + item.quantity,
-      );
-    } else {
-      _donations[index] = item.copyWith(
-        quantity: item.quantity - 1,
-        offeredQuantity: item.offeredQuantity + 1,
-      );
+    if (item.status != 'Disponível' ||
+        quantity < 1 ||
+        quantity > item.quantity) {
+      return false;
     }
 
+    final offer = DonationOffer(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      donor: userName,
+      quantity: quantity,
+      photos: photos,
+      note: note.trim(),
+      deliveryOption: deliveryOption,
+      scheduledAt: scheduledAt,
+      createdAt: DateTime.now(),
+    );
+    final remainingQuantity = item.quantity - quantity;
+    _donations[index] = item.copyWith(
+      quantity: remainingQuantity,
+      status: remainingQuantity == 0 ? 'Entregue' : 'Disponível',
+      offeredQuantity: item.offeredQuantity + quantity,
+      offers: [...item.offers, offer],
+    );
+
     notifyListeners();
-    persist();
+    await persist();
+    return true;
   }
 
   List<DonationItem> get visibleDonations {
@@ -615,18 +635,72 @@ class DonationState extends ChangeNotifier {
       _donations.where((item) => item.status == 'Disponível').length;
   int get totalPending =>
       _donations.where((item) => item.status == 'Pendente').length;
-  int get totalDelivered =>
-      _donations.where((item) => item.status == 'Entregue').length;
-  int get deliveredItems => _donations
-      .where((item) => item.status == 'Entregue')
-      .fold(
-        0,
-        (total, item) =>
-            total +
-            (item.offeredQuantity > 0 ? item.offeredQuantity : item.quantity),
-      );
+  int get totalDelivered => _donations.fold<int>(
+    0,
+    (total, item) =>
+        total +
+        item.offers.length +
+        (item.status == 'Entregue' && item.offers.isEmpty ? 1 : 0),
+  );
+  int get deliveredItems => _donations.fold<int>(
+    0,
+    (total, item) =>
+        total +
+        item.offers.fold<int>(0, (items, offer) => items + offer.quantity) +
+        (item.status == 'Entregue' && item.offers.isEmpty
+            ? (item.offeredQuantity > 0 ? item.offeredQuantity : item.quantity)
+            : 0),
+  );
+  List<DonationOfferHistory> get donationHistory {
+    final history = _donations
+        .expand(
+          (donation) => donation.offers
+              .where((offer) => offer.donor == userName)
+              .map(
+                (offer) =>
+                    DonationOfferHistory(donation: donation, offer: offer),
+              ),
+        )
+        .toList();
+    history.sort(
+      (first, second) =>
+          second.offer.createdAt.compareTo(first.offer.createdAt),
+    );
+    return history;
+  }
+
+  int get myDeliveredDonations =>
+      donationHistory.length +
+      _donations
+          .where(
+            (item) =>
+                item.donor == userName &&
+                item.status == 'Entregue' &&
+                item.offers.isEmpty,
+          )
+          .length;
+  int get myDeliveredItems =>
+      donationHistory.fold(0, (total, entry) => total + entry.offer.quantity) +
+      _donations
+          .where(
+            (item) =>
+                item.donor == userName &&
+                item.status == 'Entregue' &&
+                item.offers.isEmpty,
+          )
+          .fold(
+            0,
+            (total, item) =>
+                total +
+                (item.offeredQuantity > 0
+                    ? item.offeredQuantity
+                    : item.quantity),
+          );
   int get scheduledDonations =>
-      _donations.where((item) => item.scheduledAt != null).length;
+      donationHistory.where((entry) => entry.offer.scheduledAt != null).length +
+      _donations
+          .where((item) => item.donor == userName && item.scheduledAt != null)
+          .length;
 
   List<DonationUrgency> get donationUrgencies {
     final areas = <String, List<DonationItem>>{};
@@ -815,19 +889,27 @@ TerritorialDashboardArgs _territorialDashboardArgs(
     pendingDonations: donations
         .where((donation) => donation.status == 'Pendente')
         .length,
-    deliveredItems: donations
-        .where((donation) => donation.status == 'Entregue')
-        .fold(
-          0,
-          (total, donation) =>
-              total +
-              (donation.offeredQuantity > 0
-                  ? donation.offeredQuantity
-                  : donation.quantity),
-        ),
-    completedDonations: donations
-        .where((donation) => donation.status == 'Entregue')
-        .length,
+    deliveredItems: donations.fold<int>(
+      0,
+      (total, donation) =>
+          total +
+          donation.offers.fold<int>(
+            0,
+            (items, offer) => items + offer.quantity,
+          ) +
+          (donation.status == 'Entregue' && donation.offers.isEmpty
+              ? (donation.offeredQuantity > 0
+                    ? donation.offeredQuantity
+                    : donation.quantity)
+              : 0),
+    ),
+    completedDonations: donations.fold<int>(
+      0,
+      (total, donation) =>
+          total +
+          donation.offers.length +
+          (donation.status == 'Entregue' && donation.offers.isEmpty ? 1 : 0),
+    ),
     organizationCount: organizations.length,
     urgentAreas: urgentAreas,
     monthlyDonationCounts: monthlyCounts,
@@ -866,6 +948,61 @@ class DonationUrgency {
   };
 }
 
+class DonationOffer {
+  const DonationOffer({
+    required this.id,
+    required this.donor,
+    required this.quantity,
+    required this.photos,
+    required this.note,
+    required this.deliveryOption,
+    required this.createdAt,
+    this.scheduledAt,
+  });
+
+  final String id;
+  final String donor;
+  final int quantity;
+  final List<String> photos;
+  final String note;
+  final String deliveryOption;
+  final DateTime createdAt;
+  final DateTime? scheduledAt;
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'donor': donor,
+    'quantity': quantity,
+    'photos': photos,
+    'note': note,
+    'deliveryOption': deliveryOption,
+    'createdAt': createdAt.toIso8601String(),
+    'scheduledAt': scheduledAt?.toIso8601String(),
+  };
+
+  factory DonationOffer.fromJson(Map<String, dynamic> json) => DonationOffer(
+    id: json['id']?.toString() ?? '',
+    donor: json['donor']?.toString() ?? '',
+    quantity: (json['quantity'] as num?)?.toInt() ?? 0,
+    photos: (json['photos'] as List<dynamic>? ?? [])
+        .map((photo) => photo.toString())
+        .toList(),
+    note: json['note']?.toString() ?? '',
+    deliveryOption: json['deliveryOption']?.toString() ?? '',
+    createdAt:
+        DateTime.tryParse(json['createdAt']?.toString() ?? '') ??
+        DateTime.now(),
+    scheduledAt: DateTime.tryParse(json['scheduledAt']?.toString() ?? ''),
+  );
+}
+
+class DonationOfferHistory {
+  const DonationOfferHistory({required this.donation, required this.offer});
+
+  final DonationItem donation;
+  final DonationOffer offer;
+}
+
 class DonationItem {
   final String id;
   final String title;
@@ -882,6 +1019,7 @@ class DonationItem {
   final DateTime? scheduledAt;
   final String? receiptCode;
   final int offeredQuantity;
+  final List<DonationOffer> offers;
 
   const DonationItem({
     required this.id,
@@ -899,6 +1037,7 @@ class DonationItem {
     this.scheduledAt,
     this.receiptCode,
     this.offeredQuantity = 0,
+    this.offers = const [],
   });
 
   DonationItem copyWith({
@@ -917,6 +1056,7 @@ class DonationItem {
     DateTime? scheduledAt,
     String? receiptCode,
     int? offeredQuantity,
+    List<DonationOffer>? offers,
   }) {
     return DonationItem(
       id: id ?? this.id,
@@ -934,6 +1074,7 @@ class DonationItem {
       scheduledAt: scheduledAt ?? this.scheduledAt,
       receiptCode: receiptCode ?? this.receiptCode,
       offeredQuantity: offeredQuantity ?? this.offeredQuantity,
+      offers: offers ?? this.offers,
     );
   }
 
@@ -953,6 +1094,7 @@ class DonationItem {
     'scheduledAt': scheduledAt?.toIso8601String(),
     'receiptCode': receiptCode,
     'offeredQuantity': offeredQuantity,
+    'offers': offers.map((offer) => offer.toJson()).toList(),
   };
 
   factory DonationItem.fromJson(Map<String, dynamic> json) {
@@ -972,6 +1114,10 @@ class DonationItem {
       scheduledAt: DateTime.tryParse(json['scheduledAt'] ?? ''),
       receiptCode: json['receiptCode']?.toString(),
       offeredQuantity: (json['offeredQuantity'] as num?)?.toInt() ?? 0,
+      offers: (json['offers'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(DonationOffer.fromJson)
+          .toList(),
     );
   }
 }
@@ -1578,17 +1724,17 @@ class HomeScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           ...state.recentDonations.map(
-            (donation) => _DonationCard(donation: donation),
+            (donation) => DonationCard(donation: donation),
           ),
           const SizedBox(height: 22),
           const Text(
-            'Impacto social confirmado',
+            'Meu impacto social',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Indicadores calculados a partir de doações marcadas como entregues. Não incluem estimativas de CO₂ ou peso.',
-            style: TextStyle(color: Colors.black54),
+          Text(
+            'Itens e ofertas registradas por ${state.userName} como entregues. Não incluem estimativas de CO₂ ou peso.',
+            style: const TextStyle(color: Colors.black54),
           ),
           const SizedBox(height: 12),
           Row(
@@ -1596,7 +1742,7 @@ class HomeScreen extends StatelessWidget {
               Expanded(
                 child: _ImpactCard(
                   label: 'Itens entregues',
-                  value: state.deliveredItems.toString(),
+                  value: state.myDeliveredItems.toString(),
                   icon: Icons.inventory_2_outlined,
                 ),
               ),
@@ -1604,7 +1750,7 @@ class HomeScreen extends StatelessWidget {
               Expanded(
                 child: _ImpactCard(
                   label: 'Doações concluídas',
-                  value: state.totalDelivered.toString(),
+                  value: state.myDeliveredDonations.toString(),
                   icon: Icons.volunteer_activism_outlined,
                 ),
               ),
@@ -1675,7 +1821,7 @@ class DonationsScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           ...state.visibleDonations.map(
-            (donation) => _DonationCard(donation: donation),
+            (donation) => DonationCard(donation: donation),
           ),
         ],
       ),
@@ -2408,6 +2554,653 @@ class _AddDonationScreenState extends State<AddDonationScreen> {
   }
 }
 
+class DonationDetailsScreen extends StatelessWidget {
+  const DonationDetailsScreen({super.key, required this.donation});
+
+  final DonationItem donation;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final deadline = DateTime.tryParse(donation.deadline);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Detalhes da doação'),
+        actions: const [_AccessibilityMenu()],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    donation.title,
+                    style: theme.textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text('${donation.category} • ${donation.status}'),
+                  const Divider(height: 28),
+                  Text(donation.description),
+                  const SizedBox(height: 18),
+                  _DonationInfoRow(
+                    icon: Icons.inventory_2_outlined,
+                    label: 'Quantidade disponível',
+                    value: '${donation.quantity} itens',
+                  ),
+                  _DonationInfoRow(
+                    icon: Icons.volunteer_activism_outlined,
+                    label: 'Quantidade já ofertada',
+                    value: '${donation.offeredQuantity} itens',
+                  ),
+                  _DonationInfoRow(
+                    icon: Icons.person_outline,
+                    label: 'Responsável pelo cadastro',
+                    value: donation.donor,
+                  ),
+                  _DonationInfoRow(
+                    icon: Icons.location_on_outlined,
+                    label: 'Localização',
+                    value: donation.location,
+                  ),
+                  _DonationInfoRow(
+                    icon: Icons.event_outlined,
+                    label: 'Prazo',
+                    value: deadline == null
+                        ? 'Não informado'
+                        : DateFormat('dd/MM/yyyy').format(deadline),
+                  ),
+                  _DonationInfoRow(
+                    icon: Icons.add_circle_outline,
+                    label: 'Cadastrada em',
+                    value: DateFormat('dd/MM/yyyy HH:mm')
+                        .format(donation.createdAt),
+                  ),
+                  if (donation.scheduledAt != null)
+                    _DonationInfoRow(
+                      icon: Icons.event_available_outlined,
+                      label: 'Agendamento',
+                      value: DateFormat('dd/MM/yyyy HH:mm')
+                          .format(donation.scheduledAt!),
+                    ),
+                  if (donation.receiptCode != null)
+                    _DonationInfoRow(
+                      icon: Icons.confirmation_number_outlined,
+                      label: 'Código',
+                      value: donation.receiptCode!,
+                    ),
+                  _DonationInfoRow(
+                    icon: Icons.map_outlined,
+                    label: 'Coordenadas',
+                    value:
+                        '${donation.latitude.toStringAsFixed(4)}, ${donation.longitude.toStringAsFixed(4)}',
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Ofertas recebidas (${donation.offers.length})',
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 8),
+          if (donation.offers.isEmpty)
+            const Card(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('Ainda não há ofertas para esta doação.'),
+              ),
+            )
+          else
+            ...donation.offers.map(
+              (offer) => Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${offer.quantity} ${offer.quantity == 1 ? 'item' : 'itens'} • ${offer.donor}',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const Chip(label: Text('Entregue')),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Ofertado em ${DateFormat('dd/MM/yyyy HH:mm').format(offer.createdAt)}',
+                      ),
+                      if (offer.deliveryOption.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text('Entrega: ${offer.deliveryOption}'),
+                      ],
+                      if (offer.scheduledAt != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Agendamento: ${DateFormat('dd/MM/yyyy HH:mm').format(offer.scheduledAt!)}',
+                        ),
+                      ],
+                      if (offer.note.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text('Observação: ${offer.note}'),
+                      ],
+                      if (offer.photos.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          height: 110,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: offer.photos.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(width: 8),
+                            itemBuilder: (context, index) => ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: Image.memory(
+                                base64Decode(offer.photos[index]),
+                                width: 110,
+                                height: 110,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => const SizedBox(
+                                  width: 110,
+                                  child: Icon(Icons.broken_image_outlined),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DonationInfoRow extends StatelessWidget {
+  const _DonationInfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 12),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(color: Colors.black54)),
+              Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class OfferDonationScreen extends StatefulWidget {
+  const OfferDonationScreen({super.key, required this.donation});
+
+  final DonationItem donation;
+
+  @override
+  State<OfferDonationScreen> createState() => _OfferDonationScreenState();
+}
+
+class _OfferDonationScreenState extends State<OfferDonationScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _quantityController = TextEditingController(text: '1');
+  final _noteController = TextEditingController();
+  final _picker = ImagePicker();
+  final List<String> _photos = [];
+  String _deliveryOption = 'Entregar no local indicado';
+  DateTime? _scheduledAt;
+  bool _isSelectingPhotos = false;
+  bool _isSubmitting = false;
+
+  @override
+  void dispose() {
+    _quantityController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _selectPhotos() async {
+    setState(() => _isSelectingPhotos = true);
+    try {
+      final selected = await _picker.pickMultiImage(
+        imageQuality: 60,
+        maxWidth: 960,
+        maxHeight: 960,
+      );
+      if (!mounted || selected.isEmpty) return;
+
+      final remainingSlots = 3 - _photos.length;
+      final additions = <String>[];
+      var oversizedCount = 0;
+      for (final image in selected.take(remainingSlots)) {
+        final bytes = await image.readAsBytes();
+        if (bytes.length > 512 * 1024) {
+          oversizedCount++;
+          continue;
+        }
+        additions.add(base64Encode(bytes));
+      }
+
+      if (!mounted) return;
+      setState(() => _photos.addAll(additions));
+      final exceededLimit = selected.length > remainingSlots;
+      if (oversizedCount > 0 || exceededLimit) {
+        final messages = <String>[];
+        if (oversizedCount > 0) {
+          messages.add('Algumas fotos excedem o limite de 512 KB.');
+        }
+        if (exceededLimit) messages.add('É possível anexar até 3 fotos.');
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(messages.join(' '))));
+      }
+    } catch (error) {
+      debugPrint('Erro ao selecionar fotos da oferta: $error');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Não foi possível carregar as fotos.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSelectingPhotos = false);
+    }
+  }
+
+  Future<void> _pickSchedule() async {
+    final now = DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _scheduledAt ?? now,
+      firstDate: now,
+      lastDate: DateTime(now.year + 2),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: _scheduledAt == null
+          ? TimeOfDay.fromDateTime(now)
+          : TimeOfDay.fromDateTime(_scheduledAt!),
+    );
+    if (time == null || !mounted) return;
+    final selected = DateTime(
+      date.year,
+      date.month,
+      date.day,
+      time.hour,
+      time.minute,
+    );
+    if (!selected.isAfter(now)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Escolha um horário futuro para o agendamento.'),
+        ),
+      );
+      return;
+    }
+    setState(() => _scheduledAt = selected);
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _isSubmitting = true);
+    try {
+      final saved = await context.read<DonationState>().offerDonation(
+        widget.donation.id,
+        quantity: int.parse(_quantityController.text),
+        photos: List.unmodifiable(_photos),
+        note: _noteController.text.trim(),
+        deliveryOption: _deliveryOption,
+        scheduledAt: _scheduledAt,
+      );
+      if (!mounted) return;
+      if (!saved) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'A quantidade disponível mudou. Revise os dados da oferta.',
+            ),
+          ),
+        );
+        return;
+      }
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Oferta registrada como entregue.')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final donation = widget.donation;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Ofertar doação'),
+        actions: const [_AccessibilityMenu()],
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Card(
+              child: ListTile(
+                title: Text(
+                  donation.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                subtitle: Text(
+                  '${donation.category} • ${donation.location}\n${donation.quantity} itens disponíveis',
+                ),
+                isThreeLine: true,
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _quantityController,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              validator: (value) {
+                final quantity = int.tryParse(value ?? '');
+                if (quantity == null || quantity < 1) {
+                  return 'Informe pelo menos 1 item.';
+                }
+                if (quantity > donation.quantity) {
+                  return 'O máximo disponível é ${donation.quantity} itens.';
+                }
+                return null;
+              },
+              decoration: const InputDecoration(
+                labelText: 'Quantas peças deseja ofertar?',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              initialValue: _deliveryOption,
+              items: const [
+                DropdownMenuItem(
+                  value: 'Entregar no local indicado',
+                  child: Text('Vou entregar no local indicado'),
+                ),
+                DropdownMenuItem(
+                  value: 'Preciso combinar a retirada',
+                  child: Text('Preciso combinar a retirada'),
+                ),
+                DropdownMenuItem(
+                  value: 'Combinar entrega com a instituição',
+                  child: Text('Quero combinar outro local'),
+                ),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _deliveryOption = value);
+              },
+              decoration: const InputDecoration(
+                labelText: 'Como pretende entregar?',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.event_outlined),
+              title: Text(
+                _scheduledAt == null
+                    ? 'Agendar entrega (opcional)'
+                    : DateFormat('dd/MM/yyyy às HH:mm').format(_scheduledAt!),
+              ),
+              trailing: IconButton(
+                tooltip: 'Escolher data e horário',
+                onPressed: _pickSchedule,
+                icon: const Icon(Icons.edit_calendar_outlined),
+              ),
+              onTap: _pickSchedule,
+            ),
+            TextFormField(
+              controller: _noteController,
+              minLines: 2,
+              maxLines: 4,
+              maxLength: 300,
+              decoration: const InputDecoration(
+                labelText: 'Observações',
+                hintText: 'Tamanho, estado dos itens ou detalhes da entrega',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Fotos dos itens (${_photos.length}/3)',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Anexe até 3 fotos para ajudar a instituição a avaliar a oferta.',
+              style: TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 10),
+            if (_photos.isNotEmpty)
+              SizedBox(
+                height: 96,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _photos.length,
+                  separatorBuilder: (_, _) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) => Stack(
+                    children: [
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: Image.memory(
+                          base64Decode(_photos[index]),
+                          width: 96,
+                          height: 96,
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                      Positioned(
+                        top: 2,
+                        right: 2,
+                        child: IconButton.filledTonal(
+                          tooltip: 'Remover foto',
+                          onPressed: () =>
+                              setState(() => _photos.removeAt(index)),
+                          icon: const Icon(Icons.close, size: 18),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            OutlinedButton.icon(
+              onPressed: _photos.length >= 3 || _isSelectingPhotos
+                  ? null
+                  : _selectPhotos,
+              icon: _isSelectingPhotos
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.add_a_photo_outlined),
+              label: Text(
+                _isSelectingPhotos ? 'Carregando fotos...' : 'Selecionar fotos',
+              ),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: _isSubmitting ? null : _submit,
+              icon: _isSubmitting
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.volunteer_activism_outlined),
+              label: Text(_isSubmitting ? 'Enviando...' : 'Confirmar oferta'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class DonationHistoryScreen extends StatelessWidget {
+  const DonationHistoryScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final history = context.watch<DonationState>().donationHistory;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Histórico de ofertas'),
+        actions: const [_AccessibilityMenu()],
+      ),
+      body: history.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text(
+                  'Suas ofertas confirmadas aparecerão aqui.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: history.length,
+              itemBuilder: (context, index) {
+                final entry = history[index];
+                final offer = entry.offer;
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(
+                              Icons.volunteer_activism_outlined,
+                              color: Color(0xFF1F8A70),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    entry.donation.title,
+                                    style: const TextStyle(
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  Text(
+                                    '${entry.donation.category} • ${entry.donation.location}',
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Chip(
+                              label: Text('Entregue'),
+                              avatar: Icon(Icons.check_circle, size: 18),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          '${offer.quantity} ${offer.quantity == 1 ? 'item entregue' : 'itens entregues'} em ${DateFormat('dd/MM/yyyy HH:mm').format(offer.createdAt)}',
+                        ),
+                        const SizedBox(height: 4),
+                        Text('Entrega: ${offer.deliveryOption}'),
+                        if (offer.scheduledAt != null) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            'Agendado para ${DateFormat('dd/MM/yyyy HH:mm').format(offer.scheduledAt!)}',
+                          ),
+                        ],
+                        if (offer.note.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text('Observações: ${offer.note}'),
+                        ],
+                        if (offer.photos.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            height: 84,
+                            child: ListView.separated(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: offer.photos.length,
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(width: 8),
+                              itemBuilder: (context, photoIndex) => ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.memory(
+                                  base64Decode(offer.photos[photoIndex]),
+                                  width: 84,
+                                  height: 84,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => const SizedBox(
+                                    width: 84,
+                                    child: Icon(Icons.broken_image_outlined),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
@@ -2466,16 +3259,22 @@ class ProfileScreen extends StatelessWidget {
           const SizedBox(height: 18),
           ListTile(
             leading: const Icon(Icons.bar_chart_outlined),
-            title: Text('Impacto social'),
+            title: const Text('Meu impacto social'),
             subtitle: Text(
-              '${state.deliveredItems} itens entregues em ${state.totalDelivered} doações concluídas',
+              '${state.myDeliveredItems} itens entregues em ${state.myDeliveredDonations} ofertas concluídas',
             ),
           ),
           ListTile(
             leading: const Icon(Icons.history),
-            title: Text('Histórico'),
+            title: const Text('Histórico de ofertas'),
             subtitle: Text(
-              '${state.scheduledDonations} doações com entrega ou recolhimento agendado',
+              '${state.donationHistory.length} ofertas confirmadas como entregues',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const DonationHistoryScreen(),
+              ),
             ),
           ),
           const Divider(),
@@ -2539,8 +3338,8 @@ class ProfileScreen extends StatelessWidget {
   }
 }
 
-class _DonationCard extends StatelessWidget {
-  const _DonationCard({required this.donation});
+class DonationCard extends StatelessWidget {
+  const DonationCard({super.key, required this.donation});
 
   final DonationItem donation;
 
@@ -2664,7 +3463,12 @@ class _DonationCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: () {},
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            DonationDetailsScreen(donation: donation),
+                      ),
+                    ),
                     child: const Text('Detalhes'),
                   ),
                 ),
@@ -2683,7 +3487,12 @@ class _DonationCard extends StatelessWidget {
                           onPressed:
                               donation.status == 'Disponível' &&
                                   donation.quantity > 0
-                              ? () => state.offerDonation(donation.id)
+                              ? () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        OfferDonationScreen(donation: donation),
+                                  ),
+                                )
                               : null,
                           style: FilledButton.styleFrom(
                             backgroundColor: const Color(0xFF1F8A70),
