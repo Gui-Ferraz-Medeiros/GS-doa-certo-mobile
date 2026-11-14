@@ -28,6 +28,8 @@ Para gerar o APK de release:
 flutter build apk --release --dart-define=DOACERTO_API_URL=https://doacerto-mobile-api.onrender.com
 ```
 
+Baixe o APK publicado: [DoaCerto Mobile 1.0.0](https://github.com/Gui-Ferraz-Medeiros/GS-doa-certo-mobile/releases/download/v1.0.0/app-release.apk).
+
 O serviço remoto pode demorar na primeira chamada após um período sem uso. Para executar a API localmente, consulte `deployment/api`.
 
 ## Acesso demonstrativo
