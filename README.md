@@ -44,15 +44,17 @@ O app não coleta a localização do dispositivo. O diálogo de consentimento in
 
 ## Executar localmente
 
-Para iniciar a API local:
+Para iniciar a API local com o assistente:
 
 ```powershell
 cd deployment/api
 npm ci
+Copy-Item .env.example .env
+# Edite .env localmente e preencha GEMINI_API_KEY; nunca versione esse arquivo.
 npm start
 ```
 
-Configure `GEMINI_API_KEY` no ambiente do processo da API para habilitar o assistente. O arquivo `deployment/api/.env.example` lista as variáveis esperadas; não versionar chaves. Em outro terminal, inicie o app Flutter:
+O arquivo `.env` está excluído do Git. Em outro terminal, inicie o app Flutter:
 
 ```powershell
 cd C:\caminho\para\doacerto_mobile
@@ -67,17 +69,17 @@ No emulador Android, use `http://10.0.2.2:3001`; para um dispositivo físico, us
 O arquivo `render.yaml` configura um serviço Node no plano Free, com diretório isolado em `deployment/api`, verificação de saúde e implantação automática da branch `main`.
 
 1. Envie as alterações deste repositório ao GitHub.
-2. No Render, crie um **Blueprint** e conecte `Gui-Ferraz-Medeiros/GS-doa-certo-mobile`. O Render lê o `render.yaml` da raiz e solicita a criação do serviço `doacerto-mobile-api`.
+2. No Render, crie um **Blueprint** usando a URL pública `https://github.com/Gui-Ferraz-Medeiros/GS-doa-certo-mobile`. O Render lê o `render.yaml` da raiz e solicita a criação do serviço `doacerto-mobile-api`.
 3. No painel do serviço, configure `GEMINI_API_KEY` como variável secreta. Nunca coloque a chave neste repositório, no Flutter, em `--dart-define` ou em mensagem de chat. Verifique a cota e eventuais cobranças no provedor de IA.
-4. Aguarde o deploy e confirme que `https://SEU-SERVICO.onrender.com/health` retorna `{"status":"ok"}`. A API publica apenas os campos necessários das organizações e os endpoints de chat/status; não expõe o endpoint de gravação do servidor web.
+4. Aguarde o deploy e confirme que `https://doacerto-mobile-api.onrender.com/health` retorna `{"status":"ok"}`. A API publica apenas os campos necessários das organizações e os endpoints de chat/status; não expõe o endpoint de gravação do servidor web.
 5. Gere os builds apontando para a URL HTTPS criada:
 
 ```powershell
-flutter build apk --release --dart-define=DOACERTO_API_URL=https://SEU-SERVICO.onrender.com
-flutter build web --dart-define=DOACERTO_API_URL=https://SEU-SERVICO.onrender.com
+flutter build apk --release --dart-define=DOACERTO_API_URL=https://doacerto-mobile-api.onrender.com
+flutter build web --dart-define=DOACERTO_API_URL=https://doacerto-mobile-api.onrender.com
 ```
 
-O plano Free pode suspender o serviço após inatividade; a primeira requisição depois da suspensão pode demorar. Sem `GEMINI_API_KEY`, organizações e indicadores locais continuam acessíveis, mas o assistente retorna uma mensagem explícita de indisponibilidade.
+O plano Free pode suspender o serviço após inatividade; a primeira requisição depois da suspensão pode demorar cerca de 50 segundos. O repositório foi conectado como URL pública, sem autorização da integração GitHub: o Render não fará deploy automático de novos commits. Após enviar mudanças, execute uma sincronização manual do Blueprint ou conecte a conta GitHub no Render. Sem `GEMINI_API_KEY`, organizações e indicadores locais continuam acessíveis, mas o assistente retorna uma mensagem explícita de indisponibilidade.
 
 O diretório de organizações é uma cópia reduzida da base de demonstração já usada no projeto DoaCerto. Confirme endereço, coordenadas e itens aceitos diretamente com cada instituição antes de uma doação; esses dados não garantem disponibilidade atual.
 

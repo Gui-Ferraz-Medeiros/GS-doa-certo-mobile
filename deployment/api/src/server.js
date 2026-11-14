@@ -1,3 +1,7 @@
+require('dotenv').config({
+  path: require('node:path').join(__dirname, '../.env'),
+});
+
 const cors = require('cors');
 const express = require('express');
 const { randomUUID } = require('node:crypto');
