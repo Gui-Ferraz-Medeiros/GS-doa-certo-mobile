@@ -1,0 +1,62 @@
+[
+  {
+    "id": "org_01",
+    "nome": "Arsenal da Esperança",
+    "categoria": "Acolhimento e alimentos",
+    "endereco": "Rua Dr. Almeida Lima, 900",
+    "bairro": "Mooca",
+    "zona": "Zona Leste",
+    "cidade": "São Paulo",
+    "coordenadas": { "latitude": -23.5518, "longitude": -46.6124 },
+    "itens_aceitos": ["Alimentos não perecíveis", "Roupas masculinas", "Kits de higiene", "Cobertores"],
+    "urgencia_atual": "Alta"
+  },
+  {
+    "id": "org_02",
+    "nome": "Cruz Vermelha Brasileira (São Paulo)",
+    "categoria": "Ação social e emergência",
+    "endereco": "Av. Moreira Guimarães, 699",
+    "bairro": "Indianópolis",
+    "zona": "Zona Sul",
+    "cidade": "São Paulo",
+    "coordenadas": { "latitude": -23.6082, "longitude": -46.6578 },
+    "itens_aceitos": ["Roupas infantis e adultas", "Remédios lacrados", "Alimentos", "Fraldas geriátricas"],
+    "urgencia_atual": "Média"
+  },
+  {
+    "id": "org_03",
+    "nome": "Paróquia São Miguel Arcanjo (Padre Júlio Lancellotti)",
+    "categoria": "População em situação de rua",
+    "endereco": "Rua Taquari, 1100",
+    "bairro": "Belenzinho",
+    "zona": "Zona Leste",
+    "cidade": "São Paulo",
+    "coordenadas": { "latitude": -23.5489, "longitude": -46.5962 },
+    "itens_aceitos": ["Roupas de frio", "Calçados confortáveis", "Água mineral", "Artigos de higiene pessoal"],
+    "urgencia_atual": "Crítica"
+  },
+  {
+    "id": "org_04",
+    "nome": "Fundo Social de São Paulo (FUSSP)",
+    "categoria": "Órgão governamental e campanha do agasalho",
+    "endereco": "Rua Marechal Mário Guedes, 301",
+    "bairro": "Jaguaré",
+    "zona": "Zona Oeste",
+    "cidade": "São Paulo",
+    "coordenadas": { "latitude": -23.5351, "longitude": -46.7458 },
+    "itens_aceitos": ["Agasalhos", "Cobertores novos ou em bom estado", "Calçados novos"],
+    "urgencia_atual": "Média"
+  },
+  {
+    "id": "org_05",
+    "nome": "Sede Central FEESP",
+    "categoria": "Assistência social",
+    "endereco": "Rua Maria Paula, 140",
+    "bairro": "Bela Vista",
+    "zona": "Centro",
+    "cidade": "São Paulo",
+    "coordenadas": { "latitude": -23.5526, "longitude": -46.6389 },
+    "itens_aceitos": ["Móveis pequenos", "Eletrodomésticos funcionais", "Alimentos", "Roupas"],
+    "urgencia_atual": "Baixa"
+  }
+]

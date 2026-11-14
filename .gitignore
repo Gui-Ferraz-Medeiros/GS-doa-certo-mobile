@@ -47,6 +47,10 @@ app.*.map.json
 /android/local.properties
 /android/**/build/
 /android/**/*.iml
+/deployment/api/node_modules/
+/deployment/api/.env
+/deployment/api/.env.*
+!/deployment/api/.env.example
 
 # Widget Preview related
 .widget_preview/

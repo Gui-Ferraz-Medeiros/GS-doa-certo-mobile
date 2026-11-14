@@ -16,7 +16,10 @@ import 'package:doacerto_mobile/territorial_dashboards.dart';
 const String _configuredApiUrl = String.fromEnvironment('DOACERTO_API_URL');
 
 String get _apiBaseUrl {
-  if (_configuredApiUrl.isNotEmpty) return _configuredApiUrl;
+  final configuredUrl = _configuredApiUrl.trim();
+  if (configuredUrl.isNotEmpty) {
+    return configuredUrl.replaceFirst(RegExp(r'/+$'), '');
+  }
   if (kIsWeb) {
     return 'http://localhost:3001';
   }
