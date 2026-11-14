@@ -154,7 +154,7 @@ flutter test
 flutter build apk --release --dart-define=DOACERTO_API_URL=https://doacerto-mobile-api.onrender.com
 ```
 
-O [APK Android da versão 1.0.0](https://github.com/Gui-Ferraz-Medeiros/GS-doa-certo-mobile/releases/tag/v1.0.0) também está disponível na página de releases.
+O [APK Android da versão 1.1.0](https://github.com/Gui-Ferraz-Medeiros/GS-doa-certo-mobile/releases/tag/v1.1.0) também está disponível na página de releases.
 
 ## 10. Vídeo de demonstração
 
