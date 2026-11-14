@@ -29,6 +29,9 @@ String get _apiBaseUrl {
   return 'http://localhost:3001';
 }
 
+String _newConversationId() =>
+    'mobile-${DateTime.now().millisecondsSinceEpoch}-${Random().nextInt(1 << 31)}';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -182,9 +185,7 @@ class DonationState extends ChangeNotifier {
     }
 
     final savedConversationId = prefs.getString('doacerto_conversation_id');
-    conversationId =
-        savedConversationId ??
-        'mobile-${DateTime.now().millisecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+    conversationId = savedConversationId ?? _newConversationId();
     await prefs.setString('doacerto_conversation_id', conversationId);
 
     final savedMessages = prefs.getString('doacerto_assistant_messages');
@@ -301,8 +302,7 @@ class DonationState extends ChangeNotifier {
     final oldConversationId = conversationId;
     assistantError = null;
     assistantMessages = [];
-    conversationId =
-        'mobile-${DateTime.now().millisecondsSinceEpoch}-${Random.secure().nextInt(1 << 32)}';
+    conversationId = _newConversationId();
     notifyListeners();
 
     final prefs = await SharedPreferences.getInstance();
